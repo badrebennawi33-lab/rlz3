@@ -1,0 +1,403 @@
+<!DOCTYPE html>
+<html lang="ar">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+<title>RL Z 2.0</title>
+<style>
+*{box-sizing:border-box}
+body{margin:0;background:#101722;color:white;font-family:Arial,sans-serif;text-align:center;overflow:hidden}
+button,select{border:0;border-radius:10px;padding:12px 18px;font-weight:bold;font-size:16px;background:#18b8ff;color:#07111c}
+button{cursor:pointer}
+button:active{transform:scale(.96)}
+#menu{position:absolute;inset:0;background:linear-gradient(#101722dd,#101722f5);z-index:5;display:flex;flex-direction:column;align-items:center;justify-content:center;gap:12px}
+h1{font-size:48px;margin:5px;color:#18b8ff;text-shadow:0 0 20px #18b8ff}
+.panel{background:#202c3c;padding:15px;border-radius:14px;width:min(90%,420px)}
+#game{display:none}
+canvas{display:block;width:100vw;height:calc(100vh - 70px);background:#183b36}
+#hud{height:70px;display:flex;align-items:center;justify-content:space-around;background:#101722;font-size:18px}
+#controls{position:fixed;bottom:15px;left:0;right:0;display:flex;justify-content:space-between;padding:0 18px;pointer-events:none}
+.pad{display:flex;gap:10px}
+.control{pointer-events:auto;width:62px;height:62px;border-radius:50%;background:#ffffff33;border:2px solid #ffffff88;color:white;font-size:24px;touch-action:none}
+#boost{background:#ff7b18aa}
+#jump{background:#18b8ffaa}
+#shop{display:none;position:absolute;inset:0;background:#101722f5;z-index:6;padding:20px;overflow:auto}
+.caritem{background:#26364b;margin:10px auto;padding:12px;border-radius:12px;max-width:400px}
+small{color:#b9c8d8}
+</style>
+</head>
+<body>
+
+<div id="menu">
+  <h1>RL Z</h1>
+  <div class="panel">
+    <p>⚽ لعبة سيارات وكرة قدم</p>
+    <p>🪙 النقود: <b id="coins">500</b></p>
+    <label>الصعوبة:</label>
+    <select id="difficulty">
+      <option value="easy">سهلة</option>
+      <option value="normal" selected>عادية</option>
+      <option value="hard">صعبة</option>
+    </select>
+    <p><button onclick="startGame()">ابدأ المباراة</button></p>
+    <button onclick="openShop()">المتجر 🚗</button>
+  </div>
+  <p><small>تحرك بالأسهم أو أزرار الهاتف، اقفز واستخدم اللهب!</small></p>
+</div>
+
+<div id="shop">
+  <h2>المتجر 🚗</h2>
+  <p>نقودك: <b id="shopCoins">500</b></p>
+  <div id="carList"></div>
+  <button onclick="closeShop()">رجوع</button>
+</div>
+
+<div id="game">
+  <div id="hud">
+    <span id="score">0 - 0</span>
+    <span id="timer">90</span>
+    <button onclick="backMenu()">القائمة</button>
+  </div>
+  <canvas id="canvas"></canvas>
+  <div id="controls">
+    <div class="pad">
+      <button class="control" id="left">◀</button>
+      <button class="control" id="right">▶</button>
+    </div>
+    <div class="pad">
+      <button class="control" id="jump">⬆</button>
+      <button class="control" id="boost">🔥</button>
+    </div>
+  </div>
+</div>
+
+<script>
+const canvas=document.getElementById("canvas");
+const ctx=canvas.getContext("2d");
+
+let coins=Number(localStorage.getItem("rlzCoins")||500);
+let owned=JSON.parse(localStorage.getItem("rlzOwned")||'["blue"]');
+let selected=localStorage.getItem("rlzCar")||"blue";
+
+const cars=[
+ {id:"blue",name:"السيارة الأساسية",price:0,color:"#18b8ff"},
+ {id:"flame",name:"سيارة اللهب",price:250,color:"#ff7020"},
+ {id:"neon",name:"نيون",price:400,color:"#d83cff"},
+ {id:"lightning",name:"البرق",price:600,color:"#ffe52e"},
+ {id:"ghost",name:"الشبح",price:800,color:"#e8f5ff"}
+];
+
+let W=1800,H=700,scale=1;
+let player,bot,ball,keys={},touch={left:false,right:false,jump:false,boost:false};
+let scoreP=0,scoreB=0,time=90,running=false,lastTime=0,frame=0;
+let particles=[];
+
+function save(){
+ localStorage.setItem("rlzCoins",coins);
+ localStorage.setItem("rlzOwned",JSON.stringify(owned));
+ localStorage.setItem("rlzCar",selected);
+ document.getElementById("coins").textContent=coins;
+}
+
+function resize(){
+ canvas.width=window.innerWidth*devicePixelRatio;
+ canvas.height=(window.innerHeight-70)*devicePixelRatio;
+ canvas.style.width=window.innerWidth+"px";
+ canvas.style.height=(window.innerHeight-70)+"px";
+ scale=canvas.width/W;
+}
+window.addEventListener("resize",resize);
+
+function openShop(){
+ document.getElementById("shop").style.display="block";
+ document.getElementById("shopCoins").textContent=coins;
+ let list=document.getElementById("carList");
+ list.innerHTML="";
+ cars.forEach(car=>{
+  let item=document.createElement("div");
+  item.className="caritem";
+  let ownedCar=owned.includes(car.id);
+  item.innerHTML=`<b style="color:${car.color}">🚗 ${car.name}</b><p>${car.price} 🪙</p>
+  <button>${selected===car.id?"مختارة":ownedCar?"اختيار":"شراء"}</button>`;
+  item.querySelector("button").onclick=()=>{
+   if(ownedCar){
+    selected=car.id;save();openShop();
+   }else if(coins>=car.price){
+    coins-=car.price;owned.push(car.id);selected=car.id;save();openShop();
+   }else alert("ليس لديك نقود كافية!");
+  };
+  list.appendChild(item);
+ });
+}
+function closeShop(){document.getElementById("shop").style.display="none"}
+function backMenu(){
+ running=false;
+ document.getElementById("game").style.display="none";
+ document.getElementById("menu").style.display="flex";
+}
+
+function resetPositions(){
+ player={x:350,y:550,vx:0,vy:0,r:42,onGround:true,boost:100};
+ bot={x:1450,y:550,vx:0,vy:0,r:42,onGround:true};
+ ball={x:900,y:400,vx:0,vy:0,r:27};
+ particles=[];
+}
+
+function startGame(){
+ document.getElementById("menu").style.display="none";
+ document.getElementById("shop").style.display="none";
+ document.getElementById("game").style.display="block";
+ resize();
+ scoreP=scoreB=0;time=90;
+ resetPositions();
+ running=true;lastTime=performance.now();
+ updateHUD();
+ requestAnimationFrame(loop);
+}
+
+function updateHUD(){
+ document.getElementById("score").textContent=scoreP+" - "+scoreB;
+ document.getElementById("timer").textContent=Math.ceil(time);
+}
+
+function bindButton(id,prop){
+ const el=document.getElementById(id);
+ const down=e=>{e.preventDefault();touch[prop]=true};
+ const up=e=>{e.preventDefault();touch[prop]=false};
+ el.addEventListener("pointerdown",down);
+ el.addEventListener("pointerup",up);
+ el.addEventListener("pointercancel",up);
+ el.addEventListener("pointerleave",up);
+}
+bindButton("left","left");
+bindButton("right","right");
+bindButton("jump","jump");
+bindButton("boost","boost");
+
+window.addEventListener("keydown",e=>{
+ keys[e.key.toLowerCase()]=true;
+ if(["ArrowLeft","ArrowRight","ArrowUp"," "].includes(e.key))e.preventDefault();
+});
+window.addEventListener("keyup",e=>keys[e.key.toLowerCase()]=false);
+
+function inputLeft(){return keys["arrowleft"]||keys["a"]||touch.left}
+function inputRight(){return keys["arrowright"]||keys["d"]||touch.right}
+function inputJump(){return keys["arrowup"]||keys["w"]||keys[" "]||touch.jump}
+function inputBoost(){return keys["shift"]||touch.boost}
+
+function physicsCar(car,dt,isPlayer){
+ const grounded=car.y>=H-105;
+ car.onGround=grounded;
+ if(isPlayer){
+  if(inputLeft())car.vx-=900*dt;
+  if(inputRight())car.vx+=900*dt;
+  if(inputJump()&&grounded){car.vy=-650;car.onGround=false}
+  if(inputBoost()&&car.boost>0){
+   car.vx+=(car.vx>=0?1:-1)*1100*dt;
+   car.boost=Math.max(0,car.boost-35*dt);
+   if(frame%3===0)particles.push({x:car.x-35,y:car.y+10,vx:-Math.random()*150,vy:(Math.random()-.5)*80,life:.4,color:"#ff7b18"});
+  }else car.boost=Math.min(100,car.boost+12*dt);
+ }else{
+  let diff=document.getElementById("difficulty").value;
+  let speed=diff==="easy"?420:diff==="hard"?850:620;
+  let target=ball.x-70;
+  if(car.x<target-20)car.vx+=speed*dt;
+  if(car.x>target+20)car.vx-=speed*dt;
+  if(ball.y<H-180&&grounded&&Math.abs(ball.x-car.x)<300&&Math.random()<.025)car.vy=-580;
+ }
+ car.vy+=1250*dt;
+ car.x+=car.vx*dt;
+ car.y+=car.vy*dt;
+ car.vx*=Math.pow(grounded?.86:.995,dt*60);
+ car.vx=Math.max(-950,Math.min(950,car.vx));
+ if(car.y>H-105){car.y=H-105;car.vy=0;car.onGround=true}
+ car.x=Math.max(55,Math.min(W-55,car.x));
+}
+
+function collideCar(car){
+ // تصادم دائري: إذا اقتربت الكرة من السيارة تصطدم بها فعلياً
+ let dx=ball.x-car.x;
+ let dy=ball.y-car.y;
+ let dist=Math.hypot(dx,dy);
+ let minDist=ball.r+car.r+8;
+
+ if(dist<minDist){
+  if(dist===0){dx=1;dy=0;dist=1}
+  let nx=dx/dist,ny=dy/dist;
+  let overlap=minDist-dist;
+
+  // دفع الكرة خارج السيارة
+  ball.x+=nx*overlap;
+  ball.y+=ny*overlap;
+
+  // سرعة التصادم النسبية
+  let rvx=ball.vx-car.vx;
+  let rvy=ball.vy-car.vy;
+  let speed=rvx*nx+rvy*ny;
+
+  if(speed<0){
+   let impulse=-(1.35)*speed;
+   ball.vx+=impulse*nx;
+   ball.vy+=impulse*ny;
+  }
+
+  // ضربة إضافية حسب سرعة السيارة
+  ball.vx+=car.vx*.22;
+  ball.vy+=car.vy*.12-35;
+  ball.vx=Math.max(-1300,Math.min(1300,ball.vx));
+  ball.vy=Math.max(-1100,Math.min(1100,ball.vy));
+ }
+}
+
+function physicsBall(dt){
+ ball.vy+=900*dt;
+ ball.x+=ball.vx*dt;
+ ball.y+=ball.vy*dt;
+ ball.vx*=Math.pow(.995,dt*60);
+ ball.vy*=Math.pow(.999,dt*60);
+
+ if(ball.y>H-55){
+  ball.y=H-55;
+  ball.vy=-Math.abs(ball.vy)*.68;
+  ball.vx*=.92;
+ }
+ if(ball.y<ball.r+10){ball.y=ball.r+10;ball.vy=Math.abs(ball.vy)*.7}
+
+ // الجدران والمرمى
+ if(ball.x<ball.r+15){
+  if(ball.y>H/2-130&&ball.y<H/2+130){
+   if(ball.x<-10){scoreB++;goalReset()}
+  }else{ball.x=ball.r+15;ball.vx=Math.abs(ball.vx)*.75}
+ }
+ if(ball.x>W-ball.r-15){
+  if(ball.y>H/2-130&&ball.y<H/2+130){
+   if(ball.x>W+10){scoreP++;goalReset()}
+  }else{ball.x=W-ball.r-15;ball.vx=-Math.abs(ball.vx)*.75}
+ }
+}
+
+function goalReset(){
+ updateHUD();
+ ball.x=W/2;ball.y=H/2;ball.vx=0;ball.vy=0;
+ player.x=350;player.y=H-105;player.vx=0;player.vy=0;
+ bot.x=W-350;bot.y=H-105;bot.vx=0;bot.vy=0;
+}
+
+function drawField(){
+ ctx.fillStyle="#18734c";ctx.fillRect(0,0,W,H);
+ for(let i=0;i<10;i++){
+  ctx.fillStyle=i%2?"#18734c":"#1b8054";
+  ctx.fillRect(i*W/10,0,W/10,H);
+ }
+ ctx.strokeStyle="#e8fff0";ctx.lineWidth=5;
+ ctx.strokeRect(20,20,W-40,H-40);
+ ctx.beginPath();ctx.moveTo(W/2,20);ctx.lineTo(W/2,H-20);ctx.stroke();
+ ctx.beginPath();ctx.arc(W/2,H/2,110,0,Math.PI*2);ctx.stroke();
+ ctx.fillStyle="#0d4a38";
+ ctx.fillRect(0,H/2-130,65,260);
+ ctx.fillRect(W-65,H/2-130,65,260);
+ ctx.strokeStyle="#fff";ctx.lineWidth=8;
+ ctx.strokeRect(5,H/2-130,60,260);
+ ctx.strokeRect(W-65,H/2-130,60,260);
+}
+
+function drawCar(car,color){
+ ctx.save();
+ ctx.translate(car.x,car.y);
+ let angle=car.vx*.00035;
+ ctx.rotate(angle);
+ ctx.fillStyle="#111827";
+ ctx.beginPath();ctx.ellipse(0,18,48,20,0,0,Math.PI*2);ctx.fill();
+ ctx.fillStyle=color;
+ ctx.beginPath();
+ ctx.moveTo(-45,10);ctx.lineTo(-35,-15);ctx.lineTo(-18,-30);
+ ctx.lineTo(25,-30);ctx.lineTo(43,-8);ctx.lineTo(48,12);
+ ctx.closePath();ctx.fill();
+ ctx.fillStyle="#bdeeff";
+ ctx.beginPath();ctx.moveTo(-14,-25);ctx.lineTo(20,-25);ctx.lineTo(31,-8);ctx.lineTo(-25,-8);ctx.closePath();ctx.fill();
+ ctx.fillStyle="#151b25";
+ ctx.beginPath();ctx.arc(-27,15,13,0,Math.PI*2);ctx.arc(30,15,13,0,Math.PI*2);ctx.fill();
+ ctx.fillStyle="#9aa8b7";
+ ctx.beginPath();ctx.arc(-27,15,6,0,Math.PI*2);ctx.arc(30,15,6,0,Math.PI*2);ctx.fill();
+ ctx.restore();
+}
+
+function drawBall(){
+ ctx.save();
+ ctx.shadowColor="#fff";ctx.shadowBlur=15;
+ let grad=ctx.createRadialGradient(ball.x-9,ball.y-10,3,ball.x,ball.y,ball.r);
+ grad.addColorStop(0,"#fff");grad.addColorStop(1,"#bfc7d1");
+ ctx.fillStyle=grad;
+ ctx.beginPath();ctx.arc(ball.x,ball.y,ball.r,0,Math.PI*2);ctx.fill();
+ ctx.shadowBlur=0;
+ ctx.strokeStyle="#53616f";ctx.lineWidth=3;ctx.stroke();
+ ctx.fillStyle="#303b49";
+ for(let i=0;i<5;i++){
+  let a=i*Math.PI*2/5;
+  ctx.beginPath();ctx.arc(ball.x+Math.cos(a)*12,ball.y+Math.sin(a)*12,5,0,Math.PI*2);ctx.fill();
+ }
+ ctx.restore();
+}
+
+function drawParticles(dt){
+ for(let i=particles.length-1;i>=0;i--){
+  let p=particles[i];p.x+=p.vx*dt;p.y+=p.vy*dt;p.life-=dt;
+  ctx.globalAlpha=Math.max(0,p.life/.4);
+  ctx.fillStyle=p.color;ctx.beginPath();ctx.arc(p.x,p.y,7,0,Math.PI*2);ctx.fill();
+  if(p.life<=0)particles.splice(i,1);
+ }
+ ctx.globalAlpha=1;
+}
+
+function draw(){
+ ctx.setTransform(scale,0,0,scale,0,0);
+ ctx.clearRect(0,0,W,H);
+ drawField();
+ drawCar(player,cars.find(c=>c.id===selected).color);
+ drawCar(bot,"#ff4655");
+ drawBall();
+ drawParticles(1/60);
+}
+
+function loop(now){
+ if(!running)return;
+ let dt=Math.min((now-lastTime)/1000,.033);
+ lastTime=now;frame++;
+ time-=dt;
+ if(time<=0){
+  time=0;running=false;
+  coins+=Math.max(50,scoreP*50);
+  save();updateHUD();
+  alert("انتهت المباراة! حصلت على مكافأة 🪙");
+  backMenu();return;
+ }
+
+ physicsCar(player,dt,true);
+ physicsCar(bot,dt,false);
+ physicsBall(dt);
+ collideCar(player);
+ collideCar(bot);
+ updateHUD();
+ draw();
+ requestAnimationFrame(loop);
+}
+
+// تحديث رسم الجسيمات مع الوقت
+const originalDrawParticles=drawParticles;
+drawParticles=function(){
+ for(let i=particles.length-1;i>=0;i--){
+  let p=particles[i];
+  p.x+=p.vx/60;p.y+=p.vy/60;p.life-=1/60;
+  ctx.globalAlpha=Math.max(0,p.life/.4);
+  ctx.fillStyle=p.color;
+  ctx.beginPath();ctx.arc(p.x,p.y,7,0,Math.PI*2);ctx.fill();
+  if(p.life<=0)particles.splice(i,1);
+ }
+ ctx.globalAlpha=1;
+};
+
+save();
+resize();
+</script>
+</body>
+</html>
